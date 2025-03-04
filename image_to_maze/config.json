@@ -1,0 +1,5 @@
+{
+  "image_path": "maze_photo3.jpg",
+  "output_path": "maze.txt",
+  "debug": true
+}

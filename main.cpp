@@ -9,6 +9,13 @@
 #include <iostream>
 #include <queue>
 #include <set>
+#include <fstream>
+#include <string>
+#include <ctime>
+
+enum MazeSource { AUTO_GENERATED, FILE_LOADED };
+MazeSource mazeSource = AUTO_GENERATED;
+std::string mazeFilePath = "maze.txt";
 
 
 #define CELL_WIDTH 20
@@ -165,6 +172,83 @@ void makeMaze(Cell *maze,int size){
     // reset visit status for agent to navigate
     for (int i = 0; i < size * size; i++) {
         maze[i].visited = false;
+    }
+}
+
+// Function to load a maze from a file
+bool loadMazeFromFile(Cell* maze, int size, const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file: " << filename << std::endl;
+        return false;
+    }
+    
+    // Reset the maze
+    resetMaze(maze, size);
+    
+    // The file format will be:
+    // Line 1: Size of the maze (must match the selected size)
+    // Following lines: One line per cell, with 4 binary digits representing walls [top, right, bottom, left]
+    // 1 means wall exists, 0 means no wall
+    
+    int fileSize;
+    file >> fileSize;
+    
+    if (fileSize != size) {
+        std::cerr << "Maze size in file (" << fileSize << ") doesn't match selected size (" << size << ")" << std::endl;
+        return false;
+    }
+    
+    for (int i = 0; i < size * size; i++) {
+        std::string wallConfig;
+        file >> wallConfig;
+        
+        if (wallConfig.length() != 4) {
+            std::cerr << "Invalid wall configuration for cell " << i << std::endl;
+            return false;
+        }
+        
+        maze[i].walls[0] = (wallConfig[0] == '1'); // top
+        maze[i].walls[1] = (wallConfig[1] == '1'); // right
+        maze[i].walls[2] = (wallConfig[2] == '1'); // bottom
+        maze[i].walls[3] = (wallConfig[3] == '1'); // left
+    }
+    
+    file.close();
+    return true;
+}
+
+// Helper function to save current maze to a file
+bool saveMazeToFile(Cell* maze, int size, const std::string& filename) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file for writing: " << filename << std::endl;
+        return false;
+    }
+    
+    file << size << std::endl;
+    
+    for (int i = 0; i < size * size; i++) {
+        file << (maze[i].walls[0] ? "1" : "0")  // top
+             << (maze[i].walls[1] ? "1" : "0")  // right
+             << (maze[i].walls[2] ? "1" : "0")  // bottom
+             << (maze[i].walls[3] ? "1" : "0")  // left
+             << std::endl;
+    }
+    
+    file.close();
+    return true;
+}
+
+void exportCurrentMaze(Cell* maze, int size) {
+    // Generate a filename using current timestamp
+    time_t now = time(0);
+    std::string filename = "maze_" + std::to_string(now) + ".txt";
+    
+    if (saveMazeToFile(maze, size, filename)) {
+        std::cout << "Maze successfully exported to " << filename << std::endl;
+    } else {
+        std::cout << "Failed to export maze" << std::endl;
     }
 }
 
@@ -422,6 +506,13 @@ int main(int argc, char* argv[]) {
     sf::Text startButtonText("Start", font, 24);
     startButtonText.setPosition((window.getSize().x - startButtonText.getGlobalBounds().width) / 2, 510);  // Center the text
 
+
+    bool useFileButton = false;
+    sf::RectangleShape useFileCheckbox(sf::Vector2f(20, 20));
+    sf::Text useFileText;
+    sf::RectangleShape filePathButton(sf::Vector2f(200, 30));
+    sf::Text filePathText;
+
     // Dropdown options
     std::vector<std::string> algorithms = {"DFS", "A*", "BFS"};
     std::vector<std::string> sizes = {"9x9", "16x16", "21x21"};
@@ -437,6 +528,28 @@ int main(int argc, char* argv[]) {
     sizeLabel.setFillColor(sf::Color::White);
     sizeLabel.setPosition(250, 5);  // Position above the Maze Size dropdown
 
+    float yOffset = 50;
+
+    useFileCheckbox.setFillColor(sf::Color::White);
+    useFileCheckbox.setOutlineColor(sf::Color::Blue);
+    useFileCheckbox.setOutlineThickness(2);
+    useFileCheckbox.setPosition(30, 100 + yOffset);
+
+    useFileText.setFont(font);
+    useFileText.setString("Load maze from file:");
+    useFileText.setCharacterSize(20);
+    useFileText.setFillColor(sf::Color::White);
+    useFileText.setPosition(60, 100 + yOffset);
+
+    filePathButton.setFillColor(sf::Color(100, 100, 250));
+    filePathButton.setPosition(30, 130 + yOffset);
+
+    filePathText.setFont(font);
+    filePathText.setString(mazeFilePath);
+    filePathText.setCharacterSize(16);
+    filePathText.setFillColor(sf::Color::White);
+    filePathText.setPosition(40, 135 + yOffset);
+
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -448,6 +561,33 @@ int main(int argc, char* argv[]) {
                 if (startButton.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
                     startButtonClicked = true;
                     gameState = GENERATING;
+                }
+
+                sf::Vector2f mousePos(event.mouseButton.x, event.mouseButton.y);
+                
+                // File checkbox
+                if (useFileCheckbox.getGlobalBounds().contains(mousePos)) {
+                    useFileButton = !useFileButton;
+                    mazeSource = useFileButton ? FILE_LOADED : AUTO_GENERATED;
+                }
+                
+                // File path button
+                if (useFileButton && filePathButton.getGlobalBounds().contains(mousePos)) {
+                    
+                    if (mazeFilePath == "maze.txt") {
+                        mazeFilePath = "maze2.txt";
+                    } else if (mazeFilePath == "maze2.txt") {
+                        mazeFilePath = "maze3.txt";
+                    } else {
+                        mazeFilePath = "maze.txt";
+                    }
+                    filePathText.setString(mazeFilePath);
+                }
+            }
+
+            if (event.type == sf::Event::KeyPressed) {
+                if (event.key.code == sf::Keyboard::E && gameState == RUNNING) {
+                    exportCurrentMaze(maze, SIZE);
                 }
             }
 
@@ -506,7 +646,20 @@ int main(int argc, char* argv[]) {
             createDropdown(window, font, sizes, sf::Vector2f(250, 30), selectedSize, sizeDropdownOpen);  // Maze size dropdown
 
             window.draw(startButton);
-            window.draw(startButtonText);       
+            window.draw(startButtonText);
+
+            if (useFileButton) {
+                useFileCheckbox.setFillColor(sf::Color::Blue);
+            } else {
+                useFileCheckbox.setFillColor(sf::Color::White);
+            }
+            window.draw(useFileCheckbox);
+            window.draw(useFileText);
+            
+            if (useFileButton) {
+                window.draw(filePathButton);
+                window.draw(filePathText);
+            }       
         } else if (gameState == GENERATING) {
             currentPos = 0;
             goalPos = SIZE * SIZE - 1;
@@ -521,7 +674,16 @@ int main(int argc, char* argv[]) {
                     maze[k].pos = k;
                 }
             }
-            makeMaze(maze, SIZE);
+            if (mazeSource == AUTO_GENERATED) {
+                makeMaze(maze, SIZE);
+            } else {
+                bool success = loadMazeFromFile(maze, SIZE, mazeFilePath);
+                if (!success) {
+                    // If loading fails, fallback to auto-generation
+                    std::cout << "Failed to load maze from file, generating automatically" << std::endl;
+                    makeMaze(maze, SIZE);
+                }
+            }
             gameState = RUNNING;
             clock.restart();
             timerStarted = true;
