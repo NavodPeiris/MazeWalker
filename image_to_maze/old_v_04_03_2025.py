@@ -5,103 +5,23 @@ import matplotlib.pyplot as plt
 import os
 import json
 
-def detect_maze_corners(image):
-    # Convert to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # Apply Gaussian blur
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # Adaptive thresholding
-    binary = cv2.adaptiveThreshold(blurred, 255, 
-                                   cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                   cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # Find contours
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Find the largest contour (assumed to be the maze boundary)
-    if not contours:
-        return None
-    
-    largest_contour = max(contours, key=cv2.contourArea)
-    
-    # Approximate polygon
-    perimeter = cv2.arcLength(largest_contour, True)
-    approx = cv2.approxPolyDP(largest_contour, 0.02 * perimeter, True)
-    
-    # If we don't have exactly 4 points, attempt to refine
-    if len(approx) != 4:
-        # Try with different approximation
-        approx = cv2.approxPolyDP(largest_contour, 0.05 * perimeter, True)
-    
-    # If still not 4 points, return None
-    if len(approx) != 4:
-        return None
-    
-    # Order points: top-left, top-right, bottom-right, bottom-left
-    pts = approx.reshape(4, 2)
-    rect = np.zeros((4, 2), dtype="float32")
-    
-    # Top-left will have smallest sum, bottom-right largest sum
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]  # Top-left
-    rect[2] = pts[np.argmax(s)]  # Bottom-right
-    
-    # Top-right will have smallest difference, bottom-left largest difference
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]  # Top-right
-    rect[3] = pts[np.argmax(diff)]  # Bottom-left
-    
-    return rect
-
-def perspective_correct_maze(image, corners=None, target_size=1000):
-    # If corners not provided, detect them
-    if corners is None:
-        corners = detect_maze_corners(image)
-        
-        # If no corners detected, return original image
-        if corners is None:
-            return image
-    
-    # Define destination points (square)
-    dst_pts = np.array([
-        [0, 0],
-        [target_size - 1, 0],
-        [target_size - 1, target_size - 1],
-        [0, target_size - 1]
-    ], dtype="float32")
-    
-    # Compute perspective transform matrix
-    M = cv2.getPerspectiveTransform(corners, dst_pts)
-    
-    # Apply perspective transformation
-    warped = cv2.warpPerspective(image, M, (target_size, target_size), 
-                                  flags=cv2.INTER_LINEAR)
-    
-    return warped
-
 def preprocess_image(image_path):
-    # Read image
     img = cv2.imread(image_path)
     if img is None:
         raise ValueError(f"Could not read image at {image_path}")
     
-    # Apply perspective correction
-    corrected_img = perspective_correct_maze(img)
-    
     # Resize image if too large while maintaining aspect ratio
     max_dimension = 1000
-    height, width = corrected_img.shape[:2]
+    height, width = img.shape[:2]
     if max(height, width) > max_dimension:
         scale = max_dimension / max(height, width)
-        corrected_img = cv2.resize(corrected_img, None, fx=scale, fy=scale)
+        img = cv2.resize(img, None, fx=scale, fy=scale)
     
-    # Convert to grayscale and apply thresholding
-    gray = cv2.cvtColor(corrected_img, cv2.COLOR_BGR2GRAY)
+    # Enhanced preprocessing
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     
-    # Adaptive thresholding
+    # Adaptive thresholding instead of simple thresholding
     binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                  cv2.THRESH_BINARY_INV, 11, 2)
     
@@ -110,9 +30,13 @@ def preprocess_image(image_path):
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     
-    return corrected_img, binary, gray
+    return img, binary, gray
 
 def detect_grid_size_improved(binary_img, gray_img, debug=False):
+    """
+    Improved method to detect the maze's grid size (5x5, 9x9, or 16x16).
+    Uses multiple approaches and cross-validates the results.
+    """
     # Get image dimensions
     h, w = binary_img.shape
     
@@ -134,7 +58,7 @@ def detect_grid_size_improved(binary_img, gray_img, debug=False):
     edges = cv2.Canny(maze_binary, 50, 150, apertureSize=3)
     
     # Detect lines using probabilistic Hough transform
-    min_line_length = min(w, h) // 22
+    min_line_length = min(w, h) // 16  # Make this smaller to detect more lines
     lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=40, 
                            minLineLength=min_line_length, maxLineGap=10)
     
@@ -151,7 +75,7 @@ def detect_grid_size_improved(binary_img, gray_img, debug=False):
         for line in lines:
             x1, y1, x2, y2 = line[0]
             cv2.line(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 1)
-        cv2.imwrite("outputs/detected_lines.jpg", debug_img)
+        cv2.imwrite("detected_lines.jpg", debug_img)
     
     # Categorize lines as horizontal or vertical
     horizontal_lines = []
@@ -195,7 +119,7 @@ def detect_grid_size_improved(binary_img, gray_img, debug=False):
             cv2.line(debug_img2, (0, y), (w, y), (0, 255, 0), 1)
         for x in vertical_positions:
             cv2.line(debug_img2, (x, 0), (x, h), (255, 0, 0), 1)
-        cv2.imwrite("outputs/grouped_lines.jpg", debug_img2)
+        cv2.imwrite("grouped_lines.jpg", debug_img2)
     
     # Method 4: Cell counting approach
     # Calculate approximate cell size
@@ -212,7 +136,7 @@ def detect_grid_size_improved(binary_img, gray_img, debug=False):
     
     # Additional method: Analyze the full image directly to count cells
     # Compute the cell size by dividing the maze dimensions by potential grid sizes
-    potential_sizes = [9, 16, 21]
+    potential_sizes = [9, 16]
     optimal_grid_size = None
     best_score = float('-inf')
     
@@ -244,17 +168,16 @@ def detect_grid_size_improved(binary_img, gray_img, debug=False):
     # Final decision: Use optimal_grid_size if available, otherwise use the count-based approach
     final_grid_size = optimal_grid_size if optimal_grid_size is not None else grid_size
     
+    # If number of detected lines suggests 9x9 or 16x16, prefer those over 5x5
     if num_cells_x > 6 or num_cells_y > 6:
         if num_cells_x <= 12 or num_cells_y <= 12:
             final_grid_size = 9
-        elif num_cells_x <= 19 or num_cells_y <= 19:
-            final_grid_size = 16
         else:
-            final_grid_size = 21
+            final_grid_size = 16
 
     # Match to closest standard size if not already one of the standard sizes
-    if final_grid_size not in [9, 16, 21]:
-        diffs = [(abs(final_grid_size - size), size) for size in [9, 16, 21]]
+    if final_grid_size not in [9, 16]:
+        diffs = [(abs(final_grid_size - size), size) for size in [9, 16]]
         final_grid_size = min(diffs)[1]
     
     print(f"Detected grid dimensions: {num_cells_x}x{num_cells_y}")
@@ -269,11 +192,12 @@ def detect_grid_size_improved(binary_img, gray_img, debug=False):
             x_pos = int(i * cell_size)
             cv2.line(debug_img3, (0, y_pos), (w, y_pos), (0, 255, 255), 1)  # Horizontal
             cv2.line(debug_img3, (x_pos, 0), (x_pos, h), (0, 255, 255), 1)  # Vertical
-        cv2.imwrite("outputs/determined_grid.jpg", debug_img3)
+        cv2.imwrite("determined_grid.jpg", debug_img3)
     
     return final_grid_size, maze_binary, (x, y, w, h)
 
 def extract_cells(maze_img, grid_size, original_img, maze_bounds):
+    """Extract individual cells from the maze."""
     h, w = maze_img.shape
     cell_h, cell_w = h // grid_size, w // grid_size
     
@@ -299,6 +223,10 @@ def extract_cells(maze_img, grid_size, original_img, maze_bounds):
     return cells, debug_img
 
 def analyze_cell_walls(cell, i, j, grid_size, debug=False):
+    """
+    Analyze a cell to detect which walls are present.
+    In binary image, wall pixels are white (255) and open space is black (0).
+    """
     h, w = cell.shape
     
     # Define narrow regions along each edge to check for walls
@@ -334,7 +262,7 @@ def analyze_cell_walls(cell, i, j, grid_size, debug=False):
     
     if debug:
         # Create debug directory if it doesn't exist
-        os.makedirs("outputs/cell_debug", exist_ok=True)
+        os.makedirs("cell_debug", exist_ok=True)
         
         # Create a debug view of the cell with detected walls
         debug_cell = cv2.cvtColor(cell.copy(), cv2.COLOR_GRAY2BGR)
@@ -347,7 +275,7 @@ def analyze_cell_walls(cell, i, j, grid_size, debug=False):
         if left_wall:
             cv2.line(debug_cell, (wall_thickness//2, 0), (wall_thickness//2, h), (0, 0, 255), 1)
         
-        cv2.imwrite(f"outputs/cell_debug/cell_{i}_{j}.png", debug_cell)
+        cv2.imwrite(f"cell_debug/cell_{i}_{j}.png", debug_cell)
     
     return [top_wall, right_wall, bottom_wall, left_wall]
 
@@ -457,12 +385,13 @@ def analyze_all_cells(cells, grid_size, debug=False):
                 cv2.putText(debug_grid, f"{i},{j}", (cell_x + 15, cell_y + 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1)
         
-        cv2.imwrite("outputs/walls_debug_consistent.jpg", debug_grid)
-        cv2.imwrite("outputs/walls_debug.jpg", debug_grid)
+        cv2.imwrite("walls_debug_consistent.jpg", debug_grid)
+        cv2.imwrite("walls_debug.jpg", debug_grid)
     
     return walls
 
 def generate_output_file(grid_size, walls, output_path):
+    """Generate the output text file."""
     with open(output_path, 'w') as f:
         # Write grid size
         f.write(f"{grid_size}\n")
@@ -472,6 +401,7 @@ def generate_output_file(grid_size, walls, output_path):
             f.write(f"{''.join(map(str, wall))}\n")
 
 def visualize_detected_maze(grid_size, walls, output_path):
+    """Generate a visualization of the detected maze."""
     # Create an image to visualize the maze
     cell_size = 30
     img_size = grid_size * cell_size
@@ -499,8 +429,16 @@ def visualize_detected_maze(grid_size, walls, output_path):
     print(f"Maze visualization saved to {vis_path}")
 
 def process_maze(image_path, output_path, debug=False):
+    """Process a maze image and generate the output text file."""
+    # Create debug directory if needed
+    if debug:
+        os.makedirs("debug", exist_ok=True)
+    
     # Preprocess image
     original_img, binary_img, gray_img = preprocess_image(image_path)
+    
+    if debug:
+        cv2.imwrite("debug/binary_image.jpg", binary_img)
     
     # Detect grid size using improved method
     grid_size, maze_img, maze_bounds = detect_grid_size_improved(binary_img, gray_img, debug=debug)
@@ -526,6 +464,7 @@ def process_maze(image_path, output_path, debug=False):
 
 
 def verify_grid_size(binary_img, detected_size):
+    """Verify if the detected grid size makes sense based on image analysis."""
     h, w = binary_img.shape
     cell_h, cell_w = h // detected_size, w // detected_size
     
