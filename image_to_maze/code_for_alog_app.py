@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import os
-import json
+import argparse
 
 # Detect for corners of the maze square.
 def detect_maze_corners(image):
@@ -373,11 +373,13 @@ def process_maze(image_path, output_path):
     generate_output_file(grid_size, walls, output_path)
 
 if __name__ == "__main__":
-    # Load configuration from config.json
-    with open('config.json', 'r') as config_file:
-        config = json.load(config_file)
+    # Load configuration from arguments
+    parser = argparse.ArgumentParser(description='Convert a maze image to a text file')
+    
+    parser.add_argument('--image_path', type=str, help='path to image')
+    args = parser.parse_args()
 
-    image_path = config.get('image_path')
-    output_path = config.get('output_path')
+    image_path = args.image_path
+    output_path = 'maze.txt'
     
     process_maze(image_path, output_path)

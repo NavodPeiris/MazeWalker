@@ -3,29 +3,23 @@ import numpy as np
 import os
 import json
 
-# Detect for corners of the maze square.
 def detect_maze_corners(image):
-
-    # Convert image to grayscale
+    """Detect the four corners of a maze in an image."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Reduce noice
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    # Convert image to binary
     binary = cv2.adaptiveThreshold(blurred, 255, 
                                   cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                   cv2.THRESH_BINARY_INV, 11, 2)
     
-    # Find countour lines
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if not contours:
         return None
     
-    # Largest contours is boundary
     largest_contour = max(contours, key=cv2.contourArea)
     perimeter = cv2.arcLength(largest_contour, True)
     
-    # Approximate with 4 points
+    # Try to approximate with 4 points
     for approx_factor in [0.02, 0.05]:
         approx = cv2.approxPolyDP(largest_contour, approx_factor * perimeter, True)
         if len(approx) == 4:
@@ -35,7 +29,7 @@ def detect_maze_corners(image):
     if len(approx) != 4:
         return None
     
-    # Order: top-left, top-right, bottom-right, bottom-left
+    # Order points: top-left, top-right, bottom-right, bottom-left
     pts = approx.reshape(4, 2)
     rect = np.zeros((4, 2), dtype="float32")
     
@@ -51,15 +45,14 @@ def detect_maze_corners(image):
     
     return rect
 
-# Convert skewed image into top-down view
 def perspective_correct_maze(image, corners=None, target_size=1000):
-
+    """Apply perspective correction to make the maze rectangular."""
     if corners is None:
         corners = detect_maze_corners(image)
         if corners is None:
             return image
     
-    # Based on selected resolution, output corner coordinates
+    # Define destination points (square)
     dst_pts = np.array([
         [0, 0],
         [target_size - 1, 0],
@@ -74,14 +67,14 @@ def perspective_correct_maze(image, corners=None, target_size=1000):
     
     return warped
 
-# Load and preprocess the image.
 def preprocess_image(image_path):
+    """Load and preprocess the maze image."""
     # Read image
     img = cv2.imread(image_path)
     if img is None:
         raise ValueError(f"Could not read image at {image_path}")
     
-    # Resize to detect grid size
+    # Quick resize to detect grid size
     quick_resize = 1000
     height, width = img.shape[:2]
     scale = quick_resize / max(height, width)
@@ -102,9 +95,9 @@ def preprocess_image(image_path):
         9: 1000,
         16: 1300,
         21: 1500
-    }.get(estimated_grid_size, 1000)
+    }.get(estimated_grid_size, 1000)  # Default to 1000
 
-    # Resize the full-resolution image
+    # Resize the full-resolution image accordingly
     scale = max_dimension / max(height, width)
     corrected_img = cv2.resize(img, None, fx=scale, fy=scale)
     corrected_img = perspective_correct_maze(corrected_img, target_size=max_dimension)
@@ -117,14 +110,13 @@ def preprocess_image(image_path):
     
     # Clean up noise
     kernel = np.ones((3, 3), np.uint8)
-    # Fill holes in foreground and background
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     
-    return binary, gray
+    return corrected_img, binary, gray
 
-# Detect the grid size of the maze 
-def detect_grid_size(binary_img, gray_img):
+def detect_grid_size(binary_img, gray_img, debug=False):
+    """Detect the grid size of the maze (9x9, 16x16, or 21x21)."""
     # Get image dimensions
     h, w = binary_img.shape
     
@@ -139,6 +131,7 @@ def detect_grid_size(binary_img, gray_img):
     
     # Crop to maze boundaries
     maze_binary = binary_img[y:y+h, x:x+w].copy()
+    maze_gray = gray_img[y:y+h, x:x+w].copy()
     
     # Use edge detection for line detection
     edges = cv2.Canny(maze_binary, 50, 150, apertureSize=3)
@@ -153,6 +146,14 @@ def detect_grid_size(binary_img, gray_img):
                                minLineLength=min_line_length//2, maxLineGap=30)
         if lines is None:
             raise ValueError("Could not detect grid lines in the maze")
+    
+    # Draw debug image if requested
+    if debug:
+        debug_img = cv2.cvtColor(maze_binary.copy(), cv2.COLOR_GRAY2BGR)
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            cv2.line(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 1)
+        cv2.imwrite("outputs/detected_lines.jpg", debug_img)
     
     # Categorize lines as horizontal or vertical
     horizontal_lines = []
@@ -170,6 +171,14 @@ def detect_grid_size(binary_img, gray_img):
     # Group similar coordinates
     horizontal_positions = group_coordinates(horizontal_lines, min(w, h) // 30)
     vertical_positions = group_coordinates(vertical_lines, min(w, h) // 30)
+    
+    if debug:
+        debug_img2 = cv2.cvtColor(maze_binary.copy(), cv2.COLOR_GRAY2BGR)
+        for y in horizontal_positions:
+            cv2.line(debug_img2, (0, y), (w, y), (0, 255, 0), 1)
+        for x in vertical_positions:
+            cv2.line(debug_img2, (x, 0), (x, h), (255, 0, 0), 1)
+        cv2.imwrite("outputs/grouped_lines.jpg", debug_img2)
     
     # Calculate cell counts
     num_cells_x = len(vertical_positions) + 1
@@ -218,13 +227,24 @@ def detect_grid_size(binary_img, gray_img):
         diffs = [(abs(final_grid_size - size), size) for size in potential_sizes]
         final_grid_size = min(diffs)[1]
     
-    # print(f"Detected grid dimensions: {num_cells_x}x{num_cells_y}")
-    # print(f"Determined grid size: {final_grid_size}x{final_grid_size}")
+    print(f"Detected grid dimensions: {num_cells_x}x{num_cells_y}")
+    print(f"Determined grid size: {final_grid_size}x{final_grid_size}")
+    
+    # Draw debug grid if requested
+    if debug:
+        debug_img3 = cv2.cvtColor(maze_binary.copy(), cv2.COLOR_GRAY2BGR)
+        cell_size = w / final_grid_size
+        for i in range(final_grid_size + 1):
+            y_pos = int(i * cell_size)
+            x_pos = int(i * cell_size)
+            cv2.line(debug_img3, (0, y_pos), (w, y_pos), (0, 255, 255), 1)
+            cv2.line(debug_img3, (x_pos, 0), (x_pos, h), (0, 255, 255), 1)
+        cv2.imwrite("outputs/determined_grid.jpg", debug_img3)
     
     return final_grid_size, maze_binary, (x, y, w, h)
 
-# Group similar coordinates
 def group_coordinates(coords, threshold=None):
+    """Group similar coordinates to handle slight variations."""
     if not coords:
         return []
     
@@ -239,40 +259,34 @@ def group_coordinates(coords, threshold=None):
     
     return [sum(group) // len(group) for group in groups]
 
-# Extract individual cells
-def extract_cells(maze_img, grid_size, maze_bounds):
+def extract_cells(maze_img, grid_size, original_img, maze_bounds):
+    """Extract individual cells from the maze image."""
     h, w = maze_img.shape
     cell_h, cell_w = h // grid_size, w // grid_size
     
-    # Division happens based on the grid size
+    # Draw grid on original image for debugging
+    debug_img = original_img.copy()
+    x0, y0, _, _ = maze_bounds
+    
     cells = []
     for i in range(grid_size):
         row = []
         for j in range(grid_size):
             # Extract cell
             cell = maze_img[i*cell_h:(i+1)*cell_h, j*cell_w:(j+1)*cell_w]
-            row.append(cell) 
+            row.append(cell)
+            
+            # Draw cell boundaries for debugging
+            cv2.rectangle(debug_img, 
+                        (x0 + j*cell_w, y0 + i*cell_h), 
+                        (x0 + (j+1)*cell_w, y0 + (i+1)*cell_h), 
+                        (0, 255, 0), 1)
         cells.append(row)
     
-    return cells
+    return cells, debug_img
 
-# Finding walls by analysing cells
-def analyze_all_cells(cells, grid_size):
-    walls = []
-    
-    # Analyze each cell
-    for i in range(grid_size):
-        for j in range(grid_size):
-            cell_walls = analyze_cell_walls(cells[i][j], i, j, grid_size)
-            walls.append(cell_walls)
-
-    # Apply wall consistency check
-    walls = ensure_wall_consistency(walls, grid_size)
-
-    return walls
-
-# Analyze a single cell to detect its walls
-def analyze_cell_walls(cell, i, j, grid_size):
+def analyze_cell_walls(cell, i, j, grid_size, debug=False):
+    """Analyze a single cell to detect its walls."""
     h, w = cell.shape
     
     # Define wall detection parameters
@@ -288,7 +302,6 @@ def analyze_cell_walls(cell, i, j, grid_size):
     }
     
     walls = []
-    # Walls are found based on pixel intensity of each region
     for region in ['top', 'right', 'bottom', 'left']:
         has_wall = 1 if np.sum(regions[region]) / (regions[region].size * 255) > threshold_percentage else 0
         walls.append(has_wall)
@@ -302,13 +315,32 @@ def analyze_cell_walls(cell, i, j, grid_size):
         walls[2] = 1
     if j == 0:  # Leftmost column
         walls[3] = 1
-
+    
+    # Create debug visualization if requested
+    if debug:
+        os.makedirs("outputs/cell_debug", exist_ok=True)
+        debug_cell = cv2.cvtColor(cell.copy(), cv2.COLOR_GRAY2BGR)
+        
+        # Draw detected walls
+        wall_positions = [
+            ((0, wall_thickness//2), (w, wall_thickness//2)),  # Top
+            ((w-wall_thickness//2, 0), (w-wall_thickness//2, h)),  # Right
+            ((0, h-wall_thickness//2), (w, h-wall_thickness//2)),  # Bottom
+            ((wall_thickness//2, 0), (wall_thickness//2, h))   # Left
+        ]
+        
+        for idx, has_wall in enumerate(walls):
+            if has_wall:
+                start, end = wall_positions[idx]
+                cv2.line(debug_cell, start, end, (0, 0, 255), 1)
+        
+        cv2.imwrite(f"outputs/cell_debug/cell_{i}_{j}.png", debug_cell)
+    
     return walls
 
-# Ensuring shared walls between adjacent cells are consistent
 def ensure_wall_consistency(walls, grid_size):
-
-    # Convert walls to 2D grid for adjacency check
+    """Ensure that shared walls between adjacent cells are consistent."""
+    # Convert walls to 2D grid for easier adjacency checks
     grid_walls = []
     for i in range(grid_size):
         row = []
@@ -342,35 +374,150 @@ def ensure_wall_consistency(walls, grid_size):
     
     return consistent_walls
 
-# Generate the output text file
-def generate_output_file(grid_size, walls, output_path):
+def analyze_all_cells(cells, grid_size, debug=False):
+    """Analyze all cells in the maze to detect walls."""
+    walls = []
     
+    # Create debug grid if requested
+    if debug:
+        debug_grid = np.ones((grid_size * 50, grid_size * 50, 3), dtype=np.uint8) * 255
+    
+    # Analyze each cell
+    for i in range(grid_size):
+        for j in range(grid_size):
+            cell_walls = analyze_cell_walls(cells[i][j], i, j, grid_size, debug=debug)
+            walls.append(cell_walls)
+            
+            # Draw on debug grid
+            if debug:
+                cell_y, cell_x = i * 50, j * 50
+                # Draw the cell
+                cv2.rectangle(debug_grid, (cell_x, cell_y), (cell_x + 50, cell_y + 50), (200, 200, 200), 1)
+                
+                # Draw detected walls
+                wall_positions = [
+                    ((cell_x, cell_y), (cell_x + 50, cell_y)),  # Top
+                    ((cell_x + 50, cell_y), (cell_x + 50, cell_y + 50)),  # Right
+                    ((cell_x, cell_y + 50), (cell_x + 50, cell_y + 50)),  # Bottom
+                    ((cell_x, cell_y), (cell_x, cell_y + 50))   # Left
+                ]
+                
+                for idx, has_wall in enumerate(cell_walls):
+                    if has_wall:
+                        start, end = wall_positions[idx]
+                        cv2.line(debug_grid, start, end, (0, 0, 0), 2)
+                
+                # Add labels
+                cv2.putText(debug_grid, f"{i},{j}", (cell_x + 15, cell_y + 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1)
+    
+    # Apply wall consistency check
+    walls = ensure_wall_consistency(walls, grid_size)
+    
+    # Update debug grid with consistent walls if in debug mode
+    if debug:
+        # Clear previous grid
+        debug_grid = np.ones((grid_size * 50, grid_size * 50, 3), dtype=np.uint8) * 255
+        
+        for i in range(grid_size):
+            for j in range(grid_size):
+                idx = i * grid_size + j
+                cell_walls = walls[idx]
+                
+                cell_y, cell_x = i * 50, j * 50
+                # Draw the cell
+                cv2.rectangle(debug_grid, (cell_x, cell_y), (cell_x + 50, cell_y + 50), (200, 200, 200), 1)
+                
+                # Draw walls
+                wall_positions = [
+                    ((cell_x, cell_y), (cell_x + 50, cell_y)),  # Top
+                    ((cell_x + 50, cell_y), (cell_x + 50, cell_y + 50)),  # Right
+                    ((cell_x, cell_y + 50), (cell_x + 50, cell_y + 50)),  # Bottom
+                    ((cell_x, cell_y), (cell_x, cell_y + 50))   # Left
+                ]
+                
+                for idx, has_wall in enumerate(cell_walls):
+                    if has_wall:
+                        start, end = wall_positions[idx]
+                        cv2.line(debug_grid, start, end, (0, 0, 0), 2)
+                
+                # Add labels
+                cv2.putText(debug_grid, f"{i},{j}", (cell_x + 15, cell_y + 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1)
+        
+        cv2.imwrite("outputs/walls_debug_consistent.jpg", debug_grid)
+    
+    return walls
+
+def generate_output_file(grid_size, walls, output_path):
+    """Generate the output text file with maze data."""
     with open(output_path, 'w') as f:
         # Write grid size
         f.write(f"{grid_size}\n")
         
         # Write wall data for each cell
-        # 4-bit binary number - [top, right, bottom, left] walls
         for wall in walls:
             f.write(f"{''.join(map(str, wall))}\n")
 
-# Main functin from processing the image input to generating text output.
-def process_maze(image_path, output_path):
+def visualize_detected_maze(grid_size, walls, output_path):
+    """Create a visualization of the detected maze."""
+    cell_size = 30
+    img_size = grid_size * cell_size
+    maze_img = np.ones((img_size, img_size, 3), dtype=np.uint8) * 255
+    
+    for idx, wall in enumerate(walls):
+        i = idx // grid_size  # Row
+        j = idx % grid_size   # Column
+        
+        y, x = i * cell_size, j * cell_size
+        
+        # Draw walls
+        wall_positions = [
+            ((x, y), (x + cell_size, y)),  # Top
+            ((x + cell_size, y), (x + cell_size, y + cell_size)),  # Right
+            ((x, y + cell_size), (x + cell_size, y + cell_size)),  # Bottom
+            ((x, y), (x, y + cell_size))   # Left
+        ]
+        
+        for idx, has_wall in enumerate(wall):
+            if has_wall:
+                start, end = wall_positions[idx]
+                cv2.line(maze_img, start, end, (0, 0, 0), 2)
+    
+    # Save the visualization
+    vis_path = output_path.replace('.txt', '_visualization.jpg')
+    cv2.imwrite(vis_path, maze_img)
+    print(f"Maze visualization saved to {vis_path}")
 
-    # Loading and processing the image
-    binary_img, gray_img = preprocess_image(image_path)
+def process_maze(image_path, output_path, debug=False):
+    """Main function to process a maze image and generate output files."""
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    
+    # Preprocess image
+    original_img, binary_img, gray_img = preprocess_image(image_path)
     
     # Detect grid size
-    grid_size, maze_img, maze_bounds = detect_grid_size(binary_img, gray_img)
+    grid_size, maze_img, maze_bounds = detect_grid_size(binary_img, gray_img, debug=debug)
     
     # Extract cells
-    cells = extract_cells(maze_img, grid_size, maze_bounds)
+    cells, debug_img = extract_cells(maze_img, grid_size, original_img, maze_bounds)
     
-    # Analyze cells to find walls
-    walls = analyze_all_cells(cells, grid_size)
+    # Save debug image
+    if debug:
+        debug_path = output_path.replace('.txt', '_debug.jpg')
+        cv2.imwrite(debug_path, debug_img)
+        print(f"Debug image saved to {debug_path}")
+    
+    # Analyze cells
+    walls = analyze_all_cells(cells, grid_size, debug=debug)
     
     # Generate output file
     generate_output_file(grid_size, walls, output_path)
+    print(f"Output file saved to {output_path}")
+    
+    # Create visualization
+    visualize_detected_maze(grid_size, walls, output_path)
 
 if __name__ == "__main__":
     # Load configuration from config.json
@@ -379,5 +526,6 @@ if __name__ == "__main__":
 
     image_path = config.get('image_path')
     output_path = config.get('output_path')
+    debug = config.get('debug')
     
-    process_maze(image_path, output_path)
+    process_maze(image_path, output_path, debug)
