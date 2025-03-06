@@ -1,5 +1,5 @@
 {
-  "image_path": "inputs/skew5.jpg",
+  "image_path": "inputs/skew8.jpg",
   "output_path": "outputs/maze.txt",
   "debug": true
 }

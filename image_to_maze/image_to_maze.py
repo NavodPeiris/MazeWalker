@@ -87,15 +87,49 @@ def preprocess_image(image_path):
     if img is None:
         raise ValueError(f"Could not read image at {image_path}")
     
-    # Apply perspective correction
-    corrected_img = perspective_correct_maze(img)
+    # Step 1: Quick resize to detect grid size
+    quick_resize = 1000  # Small size for fast grid detection
+    height, width = img.shape[:2]
+    scale = quick_resize / max(height, width)
+    small_img = cv2.resize(img, None, fx=scale, fy=scale)
+
+    # Detect grid size from the small image
+    small_corrected = perspective_correct_maze(small_img)
+
+    # Convert to grayscale
+    gray_small = cv2.cvtColor(small_corrected, cv2.COLOR_BGR2GRAY)
+
+    # Apply adaptive thresholding for initial grid detection
+    blurred_small = cv2.GaussianBlur(gray_small, (5, 5), 0)
+    binary_small = cv2.adaptiveThreshold(blurred_small, 255, 
+                                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                        cv2.THRESH_BINARY_INV, 11, 2)
+
+    estimated_grid_size, _, _ = detect_grid_size_improved(binary_small, gray_small)
+
+    # Choose adaptive resolution based on estimated grid size
+    if estimated_grid_size == 9:
+        max_dimension = 1000
+    elif estimated_grid_size == 16:
+        max_dimension = 1300
+    elif estimated_grid_size == 21:
+        max_dimension = 1500
+    else:
+        max_dimension = 1000  # Default
+
+    # Resize the full-resolution image accordingly
+    scale = max_dimension / max(height, width)
+    corrected_img = cv2.resize(img, None, fx=scale, fy=scale)
+
+    # Apply full preprocessing with the correct size
+    corrected_img = perspective_correct_maze(corrected_img, target_size=max_dimension)
     
     # Resize image if too large while maintaining aspect ratio
-    max_dimension = 1000
-    height, width = corrected_img.shape[:2]
-    if max(height, width) > max_dimension:
-        scale = max_dimension / max(height, width)
-        corrected_img = cv2.resize(corrected_img, None, fx=scale, fy=scale)
+    # max_dimension = 1000
+    # height, width = corrected_img.shape[:2]
+    # if max(height, width) > max_dimension:
+    #     scale = max_dimension / max(height, width)
+    #     corrected_img = cv2.resize(corrected_img, None, fx=scale, fy=scale)
     
     # Convert to grayscale and apply thresholding
     gray = cv2.cvtColor(corrected_img, cv2.COLOR_BGR2GRAY)
