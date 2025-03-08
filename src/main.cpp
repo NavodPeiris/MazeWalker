@@ -24,10 +24,12 @@ MazeSource mazeSource = AUTO_GENERATED;
 int SIZE = 9;       //default size is 9x9
 
 // Add these variables
-enum GameState { MENU, GENERATING, RUNNING, COMPLETED, GENERATING_CV, END };
+enum GameState { MENU, GENERATING, RUNNING, GENERATING_CV, END };
 GameState gameState = MENU;
 
-int selectedAlgorithm = 0; // 0 for DFS, 1 for A*, 2 for BFS (DFS is default)
+enum Algorithms { DFS, Astar, BFS };
+
+int selectedAlgorithm = DFS; // 0 for DFS, 1 for A*, 2 for BFS (DFS is default)
 
 bool startButtonAlgoClicked = false;
 bool startButtonCVClicked = false;
@@ -222,87 +224,76 @@ void makeMaze(Cell *maze,int size){
     }
 }
 
+struct Node {
+    int pos;
+    float cost;
+    float heuristic;
+    bool operator<(const Node& other) const {
+        return cost + heuristic > other.cost + other.heuristic;
+    }
+};
+
 class Agent {
 public:
     int *pos;
     int goal;
-    std::stack<Cell> visitedStack;      // stack to keep visited cells for backtracking
 
+    // data structures used by DFS
+    std::stack<Cell> visitedStack;      // stack to keep visited cells for backtracking
+    std::queue<int> visitedQueue;
+    
     Agent(int &startPos, int goalPos) : pos(&startPos), goal(goalPos) {}
 
     // Choose the next cell based on the reward matrix
     int chooseNextMoveDFS(Cell* maze) {
-        std::vector<int> neighbours;
+        std::map<int, int> cameFrom; // To reconstruct the path
+        std::set<int> visited;
 
-        if((*pos) % (SIZE) != 0 && *pos > 0){
-            Cell left = maze[*pos-1];
-            if(!left.visited && !left.walls[1]){
-                neighbours.push_back(*pos-1);
+        // data structures used by DFS
+        std::stack<int> stack;              // stack to keep visited cells for backtracking
+
+        stack.push(*pos);
+        visited.insert(*pos);
+
+        while (!stack.empty()) {
+            int current = stack.top();
+            stack.pop();
+
+            if (current == goal) {
+                // Reconstruct path 
+                int nextMove = goal;
+                while (cameFrom.find(nextMove) != cameFrom.end() && cameFrom[nextMove] != *pos) {
+                    nextMove = cameFrom[nextMove];
+                }
+                visitedStack.push(maze[nextMove]);
+                return nextMove;
             }
-        }
-        if((*pos+1) % (SIZE) != 0 && *pos < SIZE * SIZE){
-            Cell right = maze[*pos+1]; 
-            if(!right.visited && !right.walls[3]){
-                neighbours.push_back(*pos+1);
-            }
 
-        }
-        if((*pos+SIZE) < SIZE*SIZE){
-            Cell bottom = maze[*pos+SIZE]; 
-            if(!bottom.visited && !bottom.walls[0]){
-                neighbours.push_back(*pos+SIZE);
-            }
-        }
+            std::vector<int> neighbors;
 
-        if((*pos-SIZE) > 0){
-            Cell top = maze[*pos-SIZE]; 
-            if(!top.visited && !top.walls[2]){
-                neighbours.push_back(*pos-SIZE);
-            }
-        }
-        
-        // Select the neighbor with the highest reward
-        int bestMove = *pos;
+            // Add valid neighbors
+            if (current % SIZE != 0 && !maze[current].walls[3]) neighbors.push_back(current - 1); // Left
+            if ((current + 1) % SIZE != 0 && !maze[current].walls[1]) neighbors.push_back(current + 1); // Right
+            if (current + SIZE < SIZE * SIZE && !maze[current].walls[2]) neighbors.push_back(current + SIZE); // Down
+            if (current - SIZE >= 0 && !maze[current].walls[0]) neighbors.push_back(current - SIZE); // Up
 
-        std::cout << "visites stack size: " << visitedStack.size() << std::endl;
-
-        // backtrack and fallback when dead end
-        if(neighbours.size() == 0 && !visitedStack.empty()){
-            std::cout << "dead end" << std::endl;
-            visitedStack.pop();
-            if(!visitedStack.empty()){
-                Cell current = visitedStack.top();
-                std::cout << "previous on stack: " << current.pos << std::endl;
-                maze[*pos].isActive = false;   // Deactivate current cell
-                *pos = current.pos;
-                maze[*pos].isActive = true;    // Activate new cell
-                return current.pos; //fallback
+            for (int neighbor : neighbors) {
+                if (visited.find(neighbor) == visited.end()) {
+                    visited.insert(neighbor);
+                    stack.push(neighbor);
+                    cameFrom[neighbor] = current;
+                }
             }
         }
 
-        std::random_device dev;
-        std::mt19937 rng(dev());
-        std::uniform_int_distribution<std::mt19937::result_type> dist6(0,neighbours.size()-1); 
-        int randneighbourpos = dist6(rng);
-        bestMove = neighbours[randneighbourpos];      
-
-        return bestMove;
+        return *pos; // No path found, stay in place
     }
 
     int chooseNextMoveAStar(Cell* maze) {
-        struct Node {
-            int pos;
-            float cost;
-            float heuristic;
-            bool operator<(const Node& other) const {
-                return cost + heuristic > other.cost + other.heuristic;
-            }
-        };
-
-        std::priority_queue<Node> openSet;
         std::map<int, float> gScore; // Cost from start to the current node
         std::map<int, int> cameFrom; // To reconstruct the path
 
+        std::priority_queue<Node> openSet;
         openSet.push({*pos, 0.0f, 0.0f});
         gScore[*pos] = 0.0f;
 
@@ -316,6 +307,7 @@ public:
                 while (cameFrom.find(nextMove) != cameFrom.end() && cameFrom[nextMove] != *pos) {
                     nextMove = cameFrom[nextMove];
                 }
+                visitedQueue.push(nextMove);
                 return nextMove;
             }
 
@@ -337,15 +329,17 @@ public:
                 }
             }
         }
-
+        std::cout << "Astar pos:" << *pos << std::endl;
         return *pos; // No path found, stay in place
     }
 
 
     int chooseNextMoveBFS(Cell* maze) {
-        std::queue<int> queue;
         std::map<int, int> cameFrom; // To reconstruct the path
         std::set<int> visited;
+
+        // data structures used by BFS
+        std::queue<int> queue;              // queue to keep visited cells for backtracking
 
         queue.push(*pos);
         visited.insert(*pos);
@@ -360,6 +354,7 @@ public:
                 while (cameFrom.find(nextMove) != cameFrom.end() && cameFrom[nextMove] != *pos) {
                     nextMove = cameFrom[nextMove];
                 }
+                visitedQueue.push(nextMove);
                 return nextMove;
             }
 
@@ -384,11 +379,11 @@ public:
     }
 
     int chooseNextMove(Cell* maze) {
-        if (selectedAlgorithm == 0) {
+        if (selectedAlgorithm == DFS) {
             return chooseNextMoveDFS(maze);
-        } else if (selectedAlgorithm == 1) {
+        } else if (selectedAlgorithm == Astar) {
             return chooseNextMoveAStar(maze);
-        } else if (selectedAlgorithm == 2) {
+        } else if (selectedAlgorithm == BFS) {
             return chooseNextMoveBFS(maze);
         }
         return *pos; // Default fallback
@@ -403,10 +398,6 @@ public:
             maze[*pos].isActive = true;    // Activate new cell
             Cell* cell = &maze[*pos];
             cell->visited = true;         // mark cell as visited
-            visitedStack.push(maze[*pos]);
-            Cell top = visitedStack.top();
-            int topValue = top.pos;
-            std::cout << "visited stack top: " << topValue << std::endl;
         }
     }
 };
@@ -456,6 +447,10 @@ int main(int argc, char* argv[]) {
     sf::RectangleShape finishRect;
     finishRect.setFillColor(sf::Color(0, 128, 0));
     finishRect.setSize(sf::Vector2f(CELL_WIDTH, CELL_WIDTH));
+
+    sf::RectangleShape showPathRect;
+    showPathRect.setFillColor(sf::Color(0, 128, 0));
+    showPathRect.setSize(sf::Vector2f(CELL_WIDTH, CELL_WIDTH));
 
     // Set up maze, agent, and timer
     sf::Clock clock;
@@ -526,6 +521,14 @@ int main(int argc, char* argv[]) {
     sf::Text backButtonText("Back", font, 24);
     backButtonText.setPosition((window.getSize().x - backButtonText.getGlobalBounds().width) / 2 - 150, 340);  // Center the text
     
+    // Define start CV button
+    sf::RectangleShape gotoMenuButton(sf::Vector2f(200, 50));
+    gotoMenuButton.setFillColor(sf::Color(100, 100, 250));
+    gotoMenuButton.setPosition((window.getSize().x - gotoMenuButton.getSize().x) / 2, 500);  // Center the button
+
+    sf::Text gotoMenuButtonText("Goto Menu", font, 24);
+    gotoMenuButtonText.setPosition((window.getSize().x - gotoMenuButtonText.getGlobalBounds().width) / 2, 510);  // Center the text
+
     std::string imgPath = "";
     bool isTyping = false;
 
@@ -558,6 +561,7 @@ int main(int argc, char* argv[]) {
                 
                 if (startButtonAlgo.getGlobalBounds().contains(mousePos)) {
                     startButtonAlgoClicked = true;
+                    mazeSource = AUTO_GENERATED;
                     gameState = GENERATING;
                 }
 
@@ -574,6 +578,13 @@ int main(int argc, char* argv[]) {
 
             }
 
+            // Detect click on goto menu button
+            if (gameState == RUNNING && event.type == sf::Event::MouseButtonPressed) {
+                if (gotoMenuButton.getGlobalBounds().contains(mousePos)) {
+                    gameState = MENU;
+                } 
+            }
+
             // Detect click on input box
             if (event.type == sf::Event::MouseButtonPressed) {
                 if (inputBox.getGlobalBounds().contains(mousePos)) {
@@ -584,14 +595,11 @@ int main(int argc, char* argv[]) {
             }
 
             // Handle start end button click
-            if (event.type == sf::Event::MouseButtonPressed) {
+            if (gameState == GENERATING_CV && event.type == sf::Event::MouseButtonPressed) {
                 if (imgSubmitButton.getGlobalBounds().contains(mousePos)) {
                     submittedImg = true;
                 }
-            }
 
-            // Handle start end button click
-            if (event.type == sf::Event::MouseButtonPressed) {
                 if (backButton.getGlobalBounds().contains(mousePos)) {
                     gameState = MENU;
                 }
@@ -720,7 +728,50 @@ int main(int argc, char* argv[]) {
             maze[currentPos].visited = true;
         } else if (gameState == RUNNING) {
             if (currentPos == goalPos) {
-                gameState = COMPLETED;
+                if(timerStarted){
+                    timerStarted = false;
+                    std::cout << "Maze solved in: " << clock.getElapsedTime().asSeconds() << " seconds." << std::endl;  
+                }
+
+                std::vector<Cell> visitedCells;
+
+                // draw path
+                if(selectedAlgorithm == DFS){
+                    std::stack<Cell> tempStack = agent->visitedStack; 
+                      
+                    // Store all visited cells
+                    while (!tempStack.empty()) {
+                        visitedCells.push_back(tempStack.top());
+                        tempStack.pop();
+                    }
+                }
+                else if(selectedAlgorithm == Astar){
+                    std::queue<int> temp_queue = agent->visitedQueue;  
+                    visitedCells.push_back(maze[0]);
+                    // Store all visited cells
+                    while (!temp_queue.empty()) {
+                        visitedCells.push_back(maze[temp_queue.front()]);
+                        temp_queue.pop();
+                    }
+                }
+                else if(selectedAlgorithm == BFS){
+                    std::queue<int> temp_queue = agent->visitedQueue; 
+                    visitedCells.push_back(maze[0]);
+                    // Store all visited cells
+                    while (!temp_queue.empty()) {
+                        visitedCells.push_back(maze[temp_queue.front()]);
+                        temp_queue.pop();
+                    }
+                }
+
+                // Draw all visited cells
+                for (const auto& cell : visitedCells) {
+                    showPathRect.setPosition(cell.x, cell.y);
+                    window.draw(showPathRect);
+                }
+
+                window.draw(gotoMenuButton);
+                window.draw(gotoMenuButtonText);
             } else {
                 agent->updatePosition(maze);
             }
@@ -740,14 +791,14 @@ int main(int argc, char* argv[]) {
             timerText.setFont(font);
             timerText.setCharacterSize(24);
             timerText.setFillColor(sf::Color::White);
-            float elapsedTime = clock.getElapsedTime().asSeconds();
-            timerText.setString("Time: " + std::to_string(elapsedTime) + "s");
+
+            if (currentPos != goalPos){
+                float elapsedTime = clock.getElapsedTime().asSeconds();
+                timerText.setString("Time: " + std::to_string(elapsedTime) + "s");
+            }
+            
             window.draw(timerText);
 
-        } else if (gameState == COMPLETED) {
-            timerStarted = false;
-            std::cout << "Maze solved in: " << clock.getElapsedTime().asSeconds() << " seconds." << std::endl;
-            gameState = MENU; // Restart game state to menu after completion
         } else if(gameState == GENERATING_CV){
             window.draw(inputBox);
             window.draw(inputText);
@@ -758,10 +809,10 @@ int main(int argc, char* argv[]) {
             window.draw(imgSubmitButton);
             window.draw(imgSubmitButtonText);
 
-            // Draw labels
             window.draw(algorithmLabel);
-            // Draw dropdown menus
             createDropdown(window, font, algorithms, sf::Vector2f(30, 30), selectedAlgorithm, algorithmDropdownOpen);  // Algorithm dropdown
+            window.draw(sizeLabel);
+            createDropdown(window, font, sizes, sf::Vector2f(250, 30), selectedSize, sizeDropdownOpen);  // Maze size dropdown
 
             if(submittedImg && imgPath != ""){
                 gameState = GENERATING;
@@ -774,7 +825,6 @@ int main(int argc, char* argv[]) {
 
         window.display();
     }
-
     delete[] maze;
     return 0;
 }
